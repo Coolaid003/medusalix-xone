@@ -1,5 +1,5 @@
 <p align="center">
-    <img src="logo.png" alt="Logo"  | width=200>
+    <img src="logo.png" alt="Logo" | width=200>
 </p>
 
 # [![Release Badge](https://img.shields.io/github/v/release/medusalix/xone?logo=github)](https://github.com/medusalix/xone/releases/latest) [![Discord Badge](https://img.shields.io/discord/733964971842732042?label=discord&logo=discord)](https://discord.gg/FDQxwWk) [![Donate Button](https://www.paypalobjects.com/en_US/i/btn/btn_donate_SM.gif)](https://www.paypal.com/donate?hosted_button_id=BWUECKFDNY446)
