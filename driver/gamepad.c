@@ -6,6 +6,7 @@
 #include <linux/module.h>
 #include <linux/uuid.h>
 #include <linux/timer.h>
+#include <linux/workqueue.h>
 
 #include "common.h"
 #include "../auth/auth.h"
@@ -25,6 +26,18 @@ static const guid_t gip_gamepad_guid_share =
 static const guid_t gip_gamepad_guid_dli =
 	GUID_INIT(0x87f2e56b, 0xc3bb, 0x49b1,
 		  0x82, 0x65, 0xff, 0xff, 0xf3, 0x77, 0x99, 0xee);
+
+enum gip_probe_states {
+  GIP_STATE_START     = 0x00,
+  GIP_STATE_PAIR      = 0x01,
+  GIP_STATE_POWER     = 0x10,
+  GIP_STATE_BATTERY   = 0x20,
+  GIP_STATE_LED       = 0x30,
+  GIP_STATE_HANDSHAKE = 0x40,
+  GIP_STATE_INPUT     = 0x50,
+  GIP_STATE_READY     = 0x60,
+  GIP_STATE_FINISH    = 0x61,
+};
 
 enum gip_gamepad_button {
 	GIP_GP_BTN_MENU = BIT(2),
@@ -86,6 +99,8 @@ struct gip_gamepad {
 
 	bool supports_share;
 	bool supports_dli;
+  
+  u8 current_state;
 
 	struct gip_gamepad_rumble {
 		/* serializes access to rumble packet */
@@ -94,6 +109,9 @@ struct gip_gamepad {
 		struct timer_list timer;
 		struct gip_gamepad_pkt_rumble pkt;
 	} rumble;
+
+  struct delayed_work dwork;
+	struct workqueue_struct *event_wq;
 };
 
 static void gip_gamepad_send_rumble(struct timer_list *timer)
@@ -291,6 +309,70 @@ static int gip_gamepad_op_input(struct gip_client *client, void *data, u32 len)
 	return 0;
 }
 
+static void gip_gamepad_state_transition(struct work_struct *work)
+{
+	struct gip_gamepad *gamepad = container_of(to_delayed_work(work),
+						  typeof(*gamepad),
+						  dwork);
+
+	int err;
+  unsigned long delay_us = 500;
+
+  switch (gamepad->current_state)
+  {
+    case GIP_STATE_START:
+	    err = gip_set_led_mode(gamepad->client,GIP_LED_BLINK_NORMAL,20);
+      //gip_init_led(&gamepad->led, gamepad->client);
+      gamepad->current_state = GIP_STATE_PAIR;
+      break;
+    case GIP_STATE_PAIR:
+      err = gip_set_power_mode_pairing(gamepad->client);
+      gamepad->current_state = GIP_STATE_POWER;
+      break;
+    case GIP_STATE_POWER:
+	    err = gip_set_power_mode(gamepad->client, GIP_PWR_ON);
+      gamepad->current_state = GIP_STATE_BATTERY;
+      break;
+    case GIP_STATE_BATTERY:
+	    err = gip_init_battery(&gamepad->battery, gamepad->client, GIP_GP_NAME);
+      gamepad->current_state = GIP_STATE_LED;
+      break;
+    case GIP_STATE_LED:
+	    err = gip_set_led_mode(gamepad->client,GIP_LED_BLINK_FAST,20);
+	    //err = gip_init_led(&gamepad->led, gamepad->client);
+      gamepad->current_state = GIP_STATE_HANDSHAKE;
+      break;
+    case GIP_STATE_HANDSHAKE:
+	    err = gip_auth_start_handshake(&gamepad->auth, gamepad->client);
+      gamepad->current_state = GIP_STATE_INPUT;
+      delay_us = 4000; 
+      break;
+    case GIP_STATE_INPUT:
+	    err = gip_init_input(&gamepad->input, gamepad->client, GIP_GP_NAME);
+      if (err == 0)
+      {
+        err = gip_gamepad_init_input(gamepad);
+      }
+      gamepad->current_state = GIP_STATE_READY;
+      break;
+    case GIP_STATE_READY:
+	    err = gip_init_led(&gamepad->led, gamepad->client);
+      gamepad->current_state = GIP_STATE_FINISH;
+      break;
+    default:
+      err = -EINVAL;
+      break;
+  }
+  if (err)
+  {
+    dev_err(&gamepad->client->dev, "%s: failed at state %d: %d\n", __func__, gamepad->current_state, err);
+  }
+  else if(gamepad->current_state != GIP_STATE_FINISH) 
+  {
+    schedule_delayed_work(&gamepad->dwork, msecs_to_jiffies(delay_us));
+  }
+}
+
 static int gip_gamepad_probe(struct gip_client *client)
 {
 	struct gip_gamepad *gamepad;
@@ -301,32 +383,13 @@ static int gip_gamepad_probe(struct gip_client *client)
 		return -ENOMEM;
 
 	gamepad->client = client;
-
-	err = gip_set_power_mode(client, GIP_PWR_ON);
-	if (err)
-		return err;
-
-	err = gip_init_battery(&gamepad->battery, client, GIP_GP_NAME);
-	if (err)
-		return err;
-
-	err = gip_init_led(&gamepad->led, client);
-	if (err)
-		return err;
-
-	err = gip_auth_start_handshake(&gamepad->auth, client);
-	if (err)
-		return err;
-
-	err = gip_init_input(&gamepad->input, client, GIP_GP_NAME);
-	if (err)
-		return err;
-
-	err = gip_gamepad_init_input(gamepad);
-	if (err)
-		return err;
+  gamepad->current_state = GIP_STATE_START;
 
 	dev_set_drvdata(&client->dev, gamepad);
+
+  /* start a delayed work for actual input initialization */
+  INIT_DELAYED_WORK(&gamepad->dwork, gip_gamepad_state_transition);
+  schedule_delayed_work(&gamepad->dwork, msecs_to_jiffies(1000));
 
 	return 0;
 }
@@ -334,6 +397,8 @@ static int gip_gamepad_probe(struct gip_client *client)
 static void gip_gamepad_remove(struct gip_client *client)
 {
 	struct gip_gamepad *gamepad = dev_get_drvdata(&client->dev);
+
+	cancel_delayed_work_sync(&gamepad->dwork);
 
 	del_timer_sync(&gamepad->rumble.timer);
 }
