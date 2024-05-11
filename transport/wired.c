@@ -12,7 +12,7 @@
 #define XONE_WIRED_INTF_DATA 0
 #define XONE_WIRED_INTF_AUDIO 1
 
-#define XONE_WIRED_NUM_DATA_URBS 8
+#define XONE_WIRED_NUM_DATA_URBS 12
 #define XONE_WIRED_NUM_AUDIO_URBS 12
 #define XONE_WIRED_NUM_AUDIO_PKTS 8
 
@@ -80,7 +80,7 @@ static void xone_wired_complete_data_in(struct urb *urb)
 resubmit:
 	/* can fail during USB device removal */
 	err = usb_submit_urb(urb, GFP_ATOMIC);
-	if (err)
+  if (err)
 		dev_dbg(dev, "%s: submit failed: %d\n", __func__, err);
 }
 

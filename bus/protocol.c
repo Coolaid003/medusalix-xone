@@ -110,6 +110,13 @@ struct gip_pkt_power {
 	u8 mode;
 } __packed;
 
+struct gip_pkt_power_pairing {
+	u8 mode;
+  u8 pairing_addr[6];
+  __le16 country_code;
+  u8 extra_data[6];
+} __packed;
+
 struct gip_pkt_virtual_key {
 	u8 down;
 	u8 key;
@@ -416,6 +423,22 @@ static int gip_request_identification(struct gip_client *client)
 
 	return gip_send_pkt(client, &hdr, NULL);
 }
+
+int gip_set_power_mode_pairing(struct gip_client *client)
+{
+	struct gip_header hdr = {};
+	struct gip_pkt_power_pairing pkt = {};
+
+	hdr.command = GIP_CMD_POWER;
+	hdr.options = client->id | GIP_OPT_INTERNAL;
+	hdr.packet_length = sizeof(pkt);
+
+	pkt.mode = GIP_PWR_PAIRING;
+  pkt.country_code = 0x5355; // US
+
+	return gip_send_pkt(client, &hdr, &pkt);
+}
+EXPORT_SYMBOL_GPL(gip_set_power_mode_pairing);
 
 int gip_set_power_mode(struct gip_client *client, enum gip_power_mode mode)
 {
@@ -1493,6 +1516,19 @@ static int gip_process_pkt(struct gip_client *client,
 
 		hdr->chunk_offset = 0;
 	}
+  else if(client->chunk_buf_out)
+  {
+    /* if command was 'authenticate' then ack at the end of the chunk
+     * even when not requested */
+    if ( (hdr->packet_length + hdr->chunk_offset >= client->chunk_buf_out->length)
+        && (hdr->command == GIP_CMD_AUTHENTICATE)
+        && ((hdr->options & GIP_OPT_ACKNOWLEDGE) == 0) )
+    {
+      gip_dbg(client, "%s: command=0x%02x, End of chunck detected : force ACK\n", __func__,
+        client->chunk_buf_out->header.command);
+      hdr->options |= GIP_OPT_ACKNOWLEDGE;
+    }
+  }
 
 	if (hdr->options & GIP_OPT_ACKNOWLEDGE) {
 		err = gip_acknowledge_pkt(client, hdr);

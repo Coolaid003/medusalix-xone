@@ -30,6 +30,8 @@ enum gip_power_mode {
 	GIP_PWR_ON = 0x00,
 	GIP_PWR_SLEEP = 0x01,
 	GIP_PWR_OFF = 0x04,
+  GIP_PWR_RUMBLE = 0x05,
+  GIP_PWR_PAIRING = 0x06,
 	GIP_PWR_RESET = 0x07,
 };
 
@@ -98,6 +100,7 @@ struct gip_classes {
 struct gip_client;
 struct gip_adapter;
 
+int gip_set_power_mode_pairing(struct gip_client *client);
 int gip_set_power_mode(struct gip_client *client, enum gip_power_mode mode);
 int gip_send_authenticate(struct gip_client *client, void *pkt, u32 len,
 			  bool acknowledge);
